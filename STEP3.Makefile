@@ -20,7 +20,7 @@ jobs/step3/%-confounder-long.txt.gz: jobs/step3/%-confounder.txt.gz
 	@[ -d $(dir $@) ] || mkdir -p $(dir $@)
 	@[ -d processed/expression/$* ] || mkdir -p processed/expression/$*
 	@zcat $< | awk 'system("! [ -f " $$NF " ]") == 0' | gzip > $@
-	qsub -P compbio_lab -o /dev/null -binding linear:1 -cwd -V -l h_vmem=8g -l h_rt=16:00:00 -b y -j y -N long_$* -t 1-$$(zcat $@ | wc -l) ./run_jobs.sh $@
+	[ $$(zcat $@ | wc -l) -eq 0 ] || qsub -P compbio_lab -o /dev/null -binding linear:1 -cwd -V -l h_vmem=16g -l h_rt=16:00:00 -b y -j y -N long_$* -t 1-$$(zcat $@ | wc -l) ./run_jobs.sh $@
 
 
 ################################################################

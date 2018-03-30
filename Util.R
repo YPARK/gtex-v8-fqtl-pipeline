@@ -149,8 +149,13 @@ find.cor.idx <- function(Y1, Y0, n.ctrl, p.val.cutoff = 1) {
         dplyr::rename(y0 = x.col, y1 = y.col) %>%
             dplyr::filter(p.val < p.val.cutoff)
 
-    ret <- y01.stat %>% dplyr::group_by(y1) %>%
-        dplyr::top_n(n = -n.ctrl, wt = p.val)
+    ret <- y01.stat %>%
+        dplyr::group_by(y1) %>%
+            dplyr::top_n(n = -n.ctrl, wt = p.val) %>%
+                dplyr::group_by(y1) %>%
+                    dplyr::sample_n(n.ctrl)
+
+    print(range(ret$p.val))
     
     return(ret$y0)
 }
