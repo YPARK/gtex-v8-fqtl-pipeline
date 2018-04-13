@@ -4,6 +4,7 @@
 `%&&%` <- function(a,b) paste(a, b, sep = '')
 glue <- function(...) paste(..., sep = '')
 .zeros <- function(n1, n2) matrix(0, n1, n2)
+.unlist <- function(...) unlist(..., use.names = FALSE)
 
 options(stringsAsFactors = FALSE)
 
@@ -19,6 +20,26 @@ log.msg <- function(...) {
 
 .read.mat <- function(...) as.matrix(read.table(...))
 
+################################################################
+linearize <- function(mat, digits = 4) {
+    require(dplyr)
+    require(tidyr)
+    colnames(mat) <- 1:ncol(mat)
+    ret <- mat %>% as.data.frame() %>% mutate(row = 1:n()) %>%
+        gather(key = col, value = val, -row) %>%
+            mutate(val = round(val, digits))
+}
+
+melt.spike.slab <- function(effect) {
+    require(dplyr)
+    ret <- effect$lodds %>% linearize() %>% rename(lodds = val) %>%
+        left_join(effect$theta %>% linearize() %>% rename(theta = val)) %>%
+            left_join(sqrt(effect$theta.var) %>% linearize() %>% rename(theta.sd = val))        
+
+    return(ret)
+}
+
+################################################################
 ## convert z-score to p-values (two-sided test)
 zscore.pvalue <- function(z) {
     2 * pnorm(abs(z), lower.tail = FALSE)
