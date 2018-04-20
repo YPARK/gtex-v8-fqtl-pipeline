@@ -35,6 +35,7 @@ dir.create(dirname(out.hdr), recursive = TRUE, showWarnings = FALSE)
 
 joint.out.file <- out.hdr %&&% '.combined.gz'
 snp.out.file <- out.hdr %&&% '.snp-factor.gz'
+max.snp.out.file <- out.hdr %&&% '.snp-max.gz'
 tis.out.file <- out.hdr %&&% '.tis-factor.gz'
 
 if(file.exists(joint.out.file)) {
@@ -84,11 +85,13 @@ if(do.permutation) {
     log.msg('Permuted breaking tissue-tissue correlation\n')
 }
 
+K <- min(ncol(Y), ncol(X))
+
 opt.reg <- list(vbiter = 5000, gammax = 1e4, tol = 1e-8,
                 rate = 1e-2, decay = -1e-2,
                 pi.ub = -1/2, pi.lb = -2, tau = -4, do.hyper = TRUE,
                 jitter = 0.1, svd.init = TRUE, out.residual = FALSE,
-                print.interv = 10, k = ncol(Y))
+                print.interv = 10, k = K)
 
 fqtl.out <- fqtl.regress(y = Y, x.mean = X, factored = TRUE, options = opt.reg)
 
@@ -108,6 +111,10 @@ snp.effect <- fqtl.out$mean.left %>% melt.spike.slab() %>%
         mutate(gene = gene.idx) %>%
             left_join(bim.tab) %>%
                 select(gene, rs, factor, lodds, theta, theta.sd)
+
+snp.max.effect <- snp.effect %>%
+    group_by(gene, factor) %>%
+        slice(which.max(lodds))
 
 snp.effect <- snp.effect %>%
         filter(lodds > snp.lodds.cutoff)
@@ -136,5 +143,6 @@ if(nrow(snp.effect) > 0) {
 write_tsv(tis.effect, path = tis.out.file)
 write_tsv(snp.effect, path = snp.out.file)
 write_tsv(out, path = joint.out.file)
+write_tsv(snp.max.effect, path = max.snp.out.file)
 
 log.msg('Successfully finished everything!')
