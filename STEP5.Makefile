@@ -2,9 +2,11 @@
 
 CHR := $(shell seq 1 22)
 
-all: $(foreach chr, $(CHR), jobs/step5/run_$(chr)_fqtl.txt.gz jobs/step5/run_$(chr)_null.txt.gz)
+all: $(foreach chr, $(CHR), $(foreach tt, fqtl null, jobs/step5/run_$(chr)_$(tt).txt.gz))
 
-long: $(foreach chr, $(CHR), jobs/step5/run_$(chr)_fqtl-long.txt.gz)
+long: $(foreach chr, $(CHR), $(foreach tt, fqtl null, jobs/step5/run_$(chr)_$(tt)-long.txt.gz))
+
+combine:
 
 jobs/step5/run_%-long.txt.gz: jobs/step5/run_%.txt.gz
 	@zcat $< | awk 'system("! [ -f " $$(NF - 1) ".combined.gz ]") == 0' | gzip > $@
