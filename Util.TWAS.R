@@ -13,8 +13,9 @@ match.eqtl.gwas <- function(plink, gwas.stat, eqtl.info) {
     temp <- gwas.stat %>%
         rename(snp.loc = position) %>%
             rename(gwas.a1 = effect_allele, gwas.a2 = non_effect_allele) %>%
-                rename(gwas.beta = effect_size, gwas.se = standard_error, gwas.z = zscore) %>%
-                    select(chromosome, snp.loc, starts_with('gwas'))
+                rename(gwas.beta = effect_size, gwas.se = standard_error) %>%
+                    mutate(gwas.z = gwas.beta / gwas.se) %>%
+                        select(chromosome, snp.loc, starts_with('gwas'))
     
     temp.eqtl <- eqtl.info %>%
         mutate(eqtl.z = eqtl.beta / eqtl.se) %>%

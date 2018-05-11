@@ -7,11 +7,11 @@ if(length(argv) != 5) {
     q()
 }
 
-fqtl.stat.file <- argv[1]             # e.g., 'stat/fqtl_22.txt.gz'
-gwas.file <- argv[2]                  # e.g., 'gtex-gwas-hg38/IMMUNOBASE_Multiple_sclerosis_hg19.txt.gz'
-geno.hdr <- argv[3]                   # e.g., 'geno/chr22'
+fqtl.stat.file <- argv[1]             # e.g., fqtl.stat.file = 'stat/fqtl_22.txt.gz'
+gwas.file <- argv[2]                  # e.g., gwas.file = 'gwas_data/ADIPOGen_Adiponectin/22.txt.gz'
+geno.hdr <- argv[3]                   # e.g., geno.hdr = 'geno/chr22'
 gg.vec <- eval(parse(text = argv[4])) # e.g., gg.vec = 1:5
-out.file <- argv[5]                   # e.g., 'temp.txt.gz'
+out.file <- argv[5]                   # e.g., out.file = 'temp.txt.gz'
 
 ################################################################
 source('Util.R')
@@ -22,6 +22,21 @@ library(tidyr)
 library(zqtl)
 
 dir.create(dirname(out.file), recursive = TRUE, showWarnings = FALSE)
+
+if(file.exists(out.file)) {
+    log.msg('File exists: %s', out.file)
+    q()
+}
+
+if(!file.exists(gwas.file)) {
+    log.msg('GWAS file does not exist: %s', gwas.file)
+    q()
+}
+
+if(!file.exists(fqtl.stat.file)) {
+    log.msg('stat file does not exist: %s', fqtl.stat.file)
+    q()
+}
 
 ################################################################
 
@@ -50,7 +65,7 @@ snp.stat <- fqtl.stat %>%
 gene.loc <- fqtl.stat %r% gg.vec %>% select(chr, tss) %>%
     rename(chromosome = chr)
 
-gwas.tab <- read_tsv(gwas.file) %>%
+gwas.tab <- read_tsv(gwas.file) %>%    
     filter(chromosome %in% unique(gene.loc$chromosome),
            position >= (min(gene.loc$tss) - cis.dist),
            position <= (max(gene.loc$tss) + cis.dist))
