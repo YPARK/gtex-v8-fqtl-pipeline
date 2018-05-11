@@ -21,6 +21,8 @@ library(dplyr)
 library(tidyr)
 library(zqtl)
 
+dir.create(dirname(out.file), recursive = TRUE, showWarnings = FALSE)
+
 ################################################################
 
 cis.dist <- 1e6
