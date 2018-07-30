@@ -9,12 +9,17 @@ library(dplyr)
 library(tidyr)
 library(fqtl)
 
-if(length(argv) != 4) { q() }
+if(length(argv) < 4) { q() }
 
 expr.file <- argv[1]                  # e.g., expr.file = 'processed/combined/chr1/4.txt.gz'
 geno.hdr <- argv[2]                   # e.g., geno.hdr = 'geno/chr1'
 out.hdr <- argv[3]                    # e.g., out.hdr = 'temp'
 do.permutation <- as.logical(argv[4]) # e.g., TRUE
+
+non.neg <- FALSE
+if(length(argv) > 4) {
+    non.neg <- as.logical(argv[5])
+}
 
 ################################################################
 temp.dir0 <- '/broad/hptmp/ypp/gtex/v8/' %&&% out.hdr
@@ -91,7 +96,7 @@ opt.reg <- list(vbiter = 5000, gammax = 1e4, tol = 1e-8,
                 rate = 1e-2, decay = -1e-2,
                 pi.ub = -1/2, pi.lb = -2, tau = -4, do.hyper = TRUE,
                 jitter = 0.1, svd.init = TRUE, out.residual = FALSE,
-                print.interv = 10, k = K)
+                print.interv = 10, k = K, mf.right.nn = non.neg)
 
 fqtl.out <- fqtl.regress(y = Y, x.mean = X, factored = TRUE, options = opt.reg)
 

@@ -65,7 +65,7 @@ func.NWAS <- function(.eqtl.z, .gwas.z, vt, D) {
     ## .eta.GWAS <- sweep(sweep(vt, 2, .gwas.z, `*`), 1, D, `/`)
     .denom <- sum(.eta.QTL^2)
     ## + sum(.eta.GWAS^2) + length(.eqtl.z)
-    .sd <- sqrt(.denom)
+    .sd <- pmax(sqrt(.denom), 1e-4)
     return(data.frame(z = .num/.sd, theta = .num, theta.se = .sd))
 }
 
@@ -138,7 +138,7 @@ func.NWAS.eqtl.perm <- function(eqtl.z, gwas.z, V.t, D, blk.ind, DEBUG = FALSE) 
     ##     n.qtl
     
     stat.num <- as.numeric(stat.num)
-    stat.denom <- as.numeric(stat.denom)
+    stat.denom <- pmax(as.numeric(stat.denom), 1e-8)
 
     if(DEBUG){
         ## confirmed: slow permutation by permutation statistic

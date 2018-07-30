@@ -43,7 +43,7 @@ if(!file.exists(fqtl.stat.file)) {
 cis.dist <- 1e6
 n.cutoff <- 10
 n.perm <- 5e7
-n.blk <- 1024
+n.blk <- 2048
 n.round <- ceiling(n.perm/n.blk)
 
 temp.dir <- system('mkdir -p /broad/hptmp/ypp/gtex-v8-twas/' %&&% out.file %&&%
@@ -70,6 +70,12 @@ gwas.tab <- read_tsv(gwas.file) %>%
            position >= (min(gene.loc$tss) - cis.dist),
            position <= (max(gene.loc$tss) + cis.dist))
 gc()
+
+if(nrow(gwas.tab) < 1) {
+    write_tsv(data.frame(), path = out.file)
+    log.msg('Finished: empty GWAS')
+    q()
+}
 
 twas.factor <- function(gg, lodds.cutoff = log(0.9) - log(0.1)) {
 
@@ -141,7 +147,16 @@ twas.factor <- function(gg, lodds.cutoff = log(0.9) - log(0.1)) {
     return(ret)
 }
 
-out.tab <- lapply(gg.vec, twas.factor) %>% bind_rows() %>%
+out.tab <- lapply(gg.vec, twas.factor) %>% bind_rows()
+
+if(nrow(out.tab) < 1) {
+    if(dir.exists(temp.dir)) { system('rm -r ' %&&% temp.dir) }
+    write_tsv(data.frame(), path = out.file)
+    log.msg('Finished: empty results')
+    q()
+}
+
+out.tab <- out.tab %>%
     mutate(z = signif(z, 4),
            theta = signif(theta, 4),
            theta.se = signif(theta.se, 4),
