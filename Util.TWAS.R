@@ -13,9 +13,8 @@ match.eqtl.gwas <- function(plink, gwas.stat, eqtl.info) {
     temp <- gwas.stat %>%
         rename(snp.loc = position) %>%
             rename(gwas.a1 = effect_allele, gwas.a2 = non_effect_allele) %>%
-                rename(gwas.beta = effect_size, gwas.se = standard_error) %>%
-                    mutate(gwas.z = gwas.beta / gwas.se) %>%
-                        select(chromosome, snp.loc, starts_with('gwas'))
+                rename(gwas.z = zscore, gwas.p = pvalue) %>%
+                    select(chromosome, snp.loc, starts_with('gwas'))
     
     temp.eqtl <- eqtl.info %>%
         mutate(eqtl.z = eqtl.beta / eqtl.se) %>%
@@ -28,16 +27,14 @@ match.eqtl.gwas <- function(plink, gwas.stat, eqtl.info) {
     
     ret <- ret %>%
         dplyr::mutate(gwas.z.flip = if_else(gwas.a1 != plink.a1, -gwas.z, gwas.z)) %>%
-            dplyr::mutate(gwas.beta.flip = if_else(gwas.a1 != plink.a1, -gwas.beta, gwas.beta)) %>%
-                dplyr::mutate(eqtl.z.flip = if_else(eqtl.a1 != plink.a1, -eqtl.z, eqtl.z)) %>%
-                    dplyr::mutate(eqtl.beta.flip = if_else(eqtl.a1 != plink.a1, -eqtl.beta, eqtl.beta))
+            dplyr::mutate(eqtl.z.flip = if_else(eqtl.a1 != plink.a1, -eqtl.z, eqtl.z)) %>%
+                dplyr::mutate(eqtl.beta.flip = if_else(eqtl.a1 != plink.a1, -eqtl.beta, eqtl.beta))
 
 
     ret <- ret %>%
-        dplyr::select(-gwas.z, -gwas.beta, -eqtl.z, -eqtl.beta,
+        dplyr::select(-gwas.z, -eqtl.z, -eqtl.beta,
                       -eqtl.a1, -eqtl.a2, -gwas.a1, -gwas.a2) %>%
-                          rename(gwas.z = gwas.z.flip, gwas.beta = gwas.beta.flip,
-                                 eqtl.z = eqtl.z.flip, eqtl.beta = eqtl.beta.flip,
+                          rename(gwas.z = gwas.z.flip, eqtl.z = eqtl.z.flip, eqtl.beta = eqtl.beta.flip,
                                  a1 = plink.a1, a2 = plink.a2)
     return(ret)
 }

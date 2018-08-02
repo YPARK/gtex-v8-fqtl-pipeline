@@ -7,6 +7,10 @@ if(length(argv) != 5) {
     q()
 }
 
+## debug: ./make.twas.R stat/fqtl_1.txt.gz gwas_data/imputed_Astle_et_al_2016_Granulocyte_count/1.txt.gz geno/chr1 111:120 twas/imputed_Astle_et_al_2016_Granulocyte_count/chr1_11.txt.gz
+
+
+
 fqtl.stat.file <- argv[1]             # e.g., fqtl.stat.file = 'stat/fqtl_22.txt.gz'
 gwas.file <- argv[2]                  # e.g., gwas.file = 'gwas_data/ADIPOGen_Adiponectin/22.txt.gz'
 geno.hdr <- argv[3]                   # e.g., geno.hdr = 'geno/chr22'
@@ -41,8 +45,8 @@ if(!file.exists(fqtl.stat.file)) {
 ################################################################
 
 cis.dist <- 1e6
-n.cutoff <- 10
-n.perm <- 5e7
+n.cutoff <- 5
+n.perm <- 2e6
 n.blk <- 2048
 n.round <- ceiling(n.perm/n.blk)
 
@@ -69,6 +73,7 @@ gwas.tab <- read_tsv(gwas.file) %>%
     filter(chromosome %in% unique(gene.loc$chromosome),
            position >= (min(gene.loc$tss) - cis.dist),
            position <= (max(gene.loc$tss) + cis.dist))
+
 gc()
 
 if(nrow(gwas.tab) < 1) {
@@ -80,7 +85,7 @@ if(nrow(gwas.tab) < 1) {
 twas.factor <- function(gg, lodds.cutoff = log(0.9) - log(0.1)) {
 
     tss <- fqtl.stat[gg, 'tss'] %>% .unlist() %>% as.integer()
-    info <- fqtl.stat %r% gg %>% select(ensg, factor)
+    info <- fqtl.stat %r% gg %>% select(hgnc, ensg, factor)
 
     plink <- subset.plink(geno.hdr, chr = basename(geno.hdr),
                           max(tss - cis.dist, 0),
@@ -125,12 +130,19 @@ twas.factor <- function(gg, lodds.cutoff = log(0.9) - log(0.1)) {
     ## adaptive permutation
     c.tot <- 0
     p.tot <- 0
+    s1 <- 0
+    s2 <- 0
+
     z.obs.abs <- abs(obs.stat[, 'z'])
+
     for(b in seq(1, n.round)){
         set.seed(b)
 
         stat.z <- func.NWAS.eqtl.perm(eqtl.z, gwas.z.tot, V.t, D, blk.mat) %>%
             select(z) %>% .unlist()
+
+        s1 <- s1 + sum(stat.z)
+        s2 <- s2 + sum(stat.z^2)
 
         c.tot <- c.tot + sum((abs(stat.z) + 1e-8) >= z.obs.abs)
         p.tot <- p.tot + length(stat.z)
@@ -143,11 +155,17 @@ twas.factor <- function(gg, lodds.cutoff = log(0.9) - log(0.1)) {
 
     log.msg('Finished: %d, %s', gg, info[1])
 
-    ret <- bind_cols(info, obs.stat) %>% mutate(p.val = (1 + c.tot)/(1 + p.tot))
+    mu <- s1 / p.tot
+    se <- sqrt(s2 / p.tot - mu^2)
+
+    ret <- bind_cols(info, obs.stat) %>%
+        mutate(n = p.tot, mu = mu, se = se) %>%
+            mutate(p.val = (1 + c.tot)/(1 + p.tot))            
     return(ret)
 }
 
-out.tab <- lapply(gg.vec, twas.factor) %>% bind_rows()
+out.tab <- lapply(gg.vec, twas.factor, lodds.cutoff = 0) %>%
+    bind_rows()
 
 if(nrow(out.tab) < 1) {
     if(dir.exists(temp.dir)) { system('rm -r ' %&&% temp.dir) }
@@ -160,6 +178,8 @@ out.tab <- out.tab %>%
     mutate(z = signif(z, 4),
            theta = signif(theta, 4),
            theta.se = signif(theta.se, 4),
+           mu = signif(mu, 4),
+           se = signif(se, 4),
            p.val = signif(p.val, 4))
 
 if(dir.exists(temp.dir)) { system('rm -r ' %&&% temp.dir) }

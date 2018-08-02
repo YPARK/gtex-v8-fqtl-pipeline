@@ -66,15 +66,15 @@ qval.bh <- p.adjust(pval, method = 'fdr')
 obs.stat.pq <- obs.stat %>% mutate(pval, qval.emp = qval$qvalues, qval.bh)
 
 take.cutoff <- function(tab) {
-    cutoff <- tab$lodds
+    cutoff <- tab$lodds.cutoff
     obs.stat.pq %>% filter(lodds >= cutoff) %>%
-        arrange(desc(pval)) %>% head(1) %>%
-            mutate(lodds) %>%
+        arrange(desc(pval)) %>%
+            head(1) %>%
                 select(lodds, pval, qval.emp, qval.bh)
 }
 
 fdr.tab <- data.frame(pip = c(1e-4, 1e-3, 1e-2, seq(.1, .9, .1))) %>%
-    mutate(lodds = log(pip) - log(1 - pip)) %>%
+    mutate(lodds.cutoff = log(pip) - log(1 - pip)) %>%
         group_by(pip) %>%
             do(take.cutoff(.))
 

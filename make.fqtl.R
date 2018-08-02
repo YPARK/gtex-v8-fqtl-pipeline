@@ -96,7 +96,7 @@ opt.reg <- list(vbiter = 5000, gammax = 1e4, tol = 1e-8,
                 rate = 1e-2, decay = -1e-2,
                 pi.ub = -1/2, pi.lb = -2, tau = -4, do.hyper = TRUE,
                 jitter = 0.1, svd.init = TRUE, out.residual = FALSE,
-                print.interv = 10, k = K, mf.right.nn = non.neg)
+                print.interv = 100, k = K, mf.right.nn = non.neg)
 
 fqtl.out <- fqtl.regress(y = Y, x.mean = X, factored = TRUE, options = opt.reg)
 
