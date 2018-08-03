@@ -13,10 +13,13 @@ all:
 
 data: jobs/20180729/data.txt.gz
 
+combine: jobs/20180729/combine.txt.gz
+
 twas: $(foreach gwas, $(GWAS), jobs/20180729/$(gwas).twas.txt.gz)
 
 twas-long: $(foreach gwas, $(GWAS), jobs/20180729/$(gwas).long-twas.txt.gz)
 
+################################################################
 jobs/20180729/data.txt.gz: $(foreach gf, $(GWAS_FILES), jobs/20180729/data-$(gf)-jobs)
 	@[ -d $(dir $@) ] || mkdir -p $(dir $@)
 	cat $^ | gzip > $@
@@ -38,4 +41,14 @@ jobs/20180729/%.twas.txt.gz:
 jobs/20180729/%.long-twas.txt.gz: jobs/20180729/%.twas.txt.gz
 	zcat $< | awk 'system("! [ -f " $$NF " ]") == 0' | gzip > $@
 	[ $$(zcat $@ | wc -l) -eq 0 ] || qsub -P compbio_lab -o /dev/null -binding linear:1 -cwd -V -l h_vmem=16g -l h_rt=24:00:00 -b y -j y -N LONG_$(shell echo $* | sed 's/\//_/g') -t 1-$$(zcat $@ | wc -l) ./run_jobs.sh $@
+
+################################################################
+jobs/20180729/combine.txt.gz: $(foreach gwas, $(GWAS), jobs/20180729/combine-$(gwas).txt)
+	cat $^ | gzip > $@
+	[ $$(zcat $@ | wc -l) -eq 0 ] || qsub -P compbio_lab -o /dev/null -binding linear:1 -cwd -V -l h_vmem=4g -l h_rt=2:00:00 -b y -j y -N TWAS_COMBINE -t 1-$$(zcat $@ | wc -l) ./run_jobs.sh $@
+
+jobs/20180729/combine-%.txt: 
+	echo "./make.combine_twas.R twas/$* twas/$*.txt.gz" > $@
+
+
 
