@@ -109,6 +109,20 @@ calc.qtl.stat <- function(xx, yy) {
     return(out.tab)
 }
 
+fast.cov <- function(x, y) {
+    n.obs <- crossprod(!is.na(x), !is.na(y))
+    ret <- crossprod(replace(x, is.na(x), 0),
+                     replace(y, is.na(y), 0)) / n.obs
+    return(ret)
+}
+
+fast.z.cov <- function(x, y) {
+    n.obs <- crossprod(!is.na(x), !is.na(y))
+    ret <- crossprod(replace(x, is.na(x), 0),
+                     replace(y, is.na(y), 0)) / sqrt(n.obs)
+    return(ret)
+}
+
 fast.cor <- function(x, y) {
     x.sd <- apply(x, 2, sd, na.rm = TRUE)
     y.sd <- apply(y, 2, sd, na.rm = TRUE)
