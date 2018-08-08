@@ -8,10 +8,12 @@ if(length(argv) != 4) {
 }
 
 twas.dir <- argv[1]                # twas.dir = './twas/'
-depth <- as.integeer(argv[2])      # depth = 7 # tree depth in hierarchical model
+depth <- as.integer(argv[2])       # depth = 7 # tree depth in hierarchical model
 prob.cutoff <- as.numeric(argv[3]) # prob.cutoff = 0.05
 out.file <- argv[4]                # out.file = 'temp.RData'
 
+library(Matrix)
+library(methods)
 library(readr)
 library(dplyr)
 library(tidyr)
@@ -29,7 +31,7 @@ clustering.factors.jaccard <- function(tab, depth = 7, prob.cutoff = .05) {
     ## Calculate Jaccard coefficients
     factor.jaccard.mat <- feat.mat %c% (-(1:2)) %>%
         as.matrix() %>%
-            (function(x) as(x, 'Matrix::sparseMatrix')) %>%
+            (function(x) as(x, 'sparseMatrix')) %>%
                 text2vec::sim2(method = 'jaccard') %>%
                     as.matrix()
 
