@@ -67,8 +67,9 @@ clustering.factors.jaccard <- function(tab, depth = 7, prob.cutoff = .05) {
                                 rseed = 20180804,         # some random seed
                                 tree.depth = (depth + 1), # need +1 for the root
                                 vbiter = 1333,
-                                inner.iter = 333,
-                                burnin.iter = 10,
+                                inner.iter = 77,
+                                final.inner.iter = 3333,
+                                burnin.iter = 11,
                                 rate = 0.01,
                                 decay = -0.75,
                                 delay = 1,
