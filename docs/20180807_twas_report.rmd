@@ -1,0 +1,848 @@
+---
+title: Understanding transcriptomic regulatory mechanisms of 114 GWAS traits through the multi-tissue factored QTL models on 48 GTEx tissues
+author: "Yongjin Park"
+theme: jekyll-theme-minimal
+date: "`r Sys.time()`"
+bibliography: gtex.bib
+csl: nature.csl
+---
+
+```{r GlobOpt, include = FALSE}
+################################################################
+dir.create('Fig/20180807/', recursive = TRUE)
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.path = 'Fig/20180807/')
+
+library(Matrix)
+library(methods)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(grid)
+source('../Util.R')
+source('./Util.Fig.R')
+.read.tsv <- function(...) suppressMessages(read_tsv(...))
+.split.bar <- function(s) strsplit(s, split = '[|]') %>% .unlist()
+.split.bar.i <- function(s) .split.bar(s) %>% as.integer()
+.split.bar.d <- function(s) .split.bar(s) %>% as.numeric()
+
+num.int <- function(x) format(x, big.mark = ',')
+num.sci <- function(x, d=2) format(x, scientific = TRUE, digits = d)
+num.round <- function(x, d=2) round(x, d)
+gg.save <- function(...) ggsave(..., useDingbats = FALSE, units = 'in', limitsize = FALSE)
+fast.similarity <- function(...) suppressMessages(text2vec::sim2(...))
+
+.read.fqtl.tis <- function(tab.file) {
+
+    ## unnest keeps on crashing...
+    .parse.tis <- function(tab) {
+        tab <-
+            data.frame(tis = .split.bar.i(tab$tis),
+                       tis.mean = .split.bar.d(tab$tis.theta),
+                       tis.sd = .split.bar.d(tab$tis.sd),
+                       tis.lodds = .split.bar.d(tab$tis.lodds))
+        return(tab)
+    }
+
+    ret <- .read.tsv(tab.file) %>%
+        select(ensg, factor, starts_with('tis')) %>%
+            group_by(ensg, factor)%>% do(.parse.tis(.)) %>%
+                as.data.frame()
+
+    log.msg('Read %s \n', tab.file)
+
+    return(ret)
+}
+
+.read.fqtl.snp <- function(tab.file, cutoff = 0) {
+
+    ## unnest keeps on crashing...
+    .parse.snp <- function(tab) {
+        tab <-
+            data.frame(snp = .split.bar(tab$snp),
+                       snp.mean = .split.bar.d(tab$snp.theta),
+                       snp.sd = .split.bar.d(tab$snp.sd),
+                       snp.lodds = .split.bar.d(tab$snp.lodds))
+        tab <- tab %>%
+            filter(snp.lodds >= cutoff)
+
+        return(tab)
+    }
+
+    ret <- .read.tsv(tab.file) %>%
+        select(ensg, factor, starts_with('snp')) %>%
+            group_by(ensg, factor)%>% do(.parse.snp(.)) %>%
+                as.data.frame()
+
+    log.msg('Read %s \n', tab.file)
+
+    return(ret)
+}
+
+## Summary of enrichment within cluster
+summary.enrichment.stat <- function(tab) {
+    ## What can we control beyond the set size?
+
+    ## calculate hypergeometric p-value
+    ## phyper(q, m, n, k, lower.tail = TRUE, log.p = FALSE)
+    ##    q: vector of quantiles representing the number of white balls
+    ##       (drawn without replacement from an urn which contains both
+    ##       black and white balls).
+    ##    m: the number of white balls in the urn.
+    ##    n: the number of black balls in the urn.
+    ##    k: the number of balls drawn from the urn.
+    ##    p: probability, it must be between 0 and 1.
+
+    m <- max(tab$white.ball) ## white balls
+    n <- max(tab$ntot) - m   ## black balls
+    k <- length(tab$drawn)   ## balls drawn
+    q <- sum(tab$drawn)      ## whilte balls drawn
+
+    pval <- phyper(q, m, n, k, lower.tail = FALSE)
+
+    data.frame(mu = mean(tab$drawn),
+               n.white = m,
+               n.drawn = k,
+               n.overlap = q,
+               pval = pval)
+}
+
+################################################################
+```
+
+```{r Read_Data}
+################################################################
+## Read all data
+coding.genes <-
+    .read.tsv('../data/coding.genes.txt.gz',
+              col_names = c('chr', 'lb', 'ub', 'strand', 'ensg', 'hgnc'),
+              col_types = 'ciiccc_')
+
+n.coding.genes <- nrow(coding.genes)
+
+.tis.cols <- c('code', 'tis.name', 'tis.size')
+
+tis.tab <- '../data/tissues.txt' %>%
+    .read.tsv(col_names = .tis.cols, col_types = 'cci_') %>%
+    mutate(tis = 1:n())
+
+gtex.color.tab <- .read.tsv('gtex_colors.txt') %>%
+    mutate(tis.color = '#' %&&% tissue_color_hex) %>%
+mutate(tis.name = gsub(tissue_id, pattern = '-', replacement = ''))
+
+twas.files <- list.files('../twas/', pattern = 'txt.gz', full.names = TRUE)
+fqtl.files <- list.files('../stat/', pattern = 'fqtl', full.names = TRUE)
+
+## Read TWAS results
+temp.twas.data.file <- '20180807_twas_result.RData'
+
+if(file.exists(temp.twas.data.file)) {
+    load(temp.twas.data.file)
+} else {
+    fqtl.tis.tab <- fqtl.files %>%
+        lapply(FUN = .read.fqtl.tis) %>%
+            bind_rows()
+
+    fqtl.snp.tab <- fqtl.files %>%
+        lapply(FUN = .read.fqtl.snp) %>%
+            bind_rows()
+
+    fdr.tab <- .read.tsv('../stat/fdr.txt.gz')
+
+    twas.tab <- twas.files %>%
+        lapply(FUN = .read.tsv) %>%
+            bind_rows() %>%
+                mutate(trait = gsub(trait, pattern = '-', replacement = '_'))
+    ntraits <- twas.tab$trait %>% unique() %>% length()
+    data.vars <- c('fdr.tab', 'fqtl.tis.tab', 'fqtl.snp.tab', 'twas.tab', 'ntraits')
+    save(list = data.vars, file = temp.twas.data.file)
+    gc()
+}
+
+max.nfactors <- twas.tab %>%
+    group_by(trait) %>%
+    summarize(nfactors = n()) %>%
+    select(nfactors) %>%
+    max() %>%
+    .unlist()
+
+twas.cutoff <- 0.05 / max.nfactors
+
+selected.factors <- twas.tab %>%
+    filter(p.val < twas.cutoff) %>%
+    select(ensg, factor) %>%
+    unique()
+
+temp.twas.clust.file <- '../twas/hsb_7_0.05_cluster.RData'
+load(temp.twas.clust.file)
+################################################################
+```
+
+
+# Results
+
+## Factored eQTL models on `r tis.tab %>% nrow() %>% num.int()` GTEx tissues
+
+### Bayesian sparse prior distribution strongly controls false discovery rate of factored regression model
+
+```{r FDR_Cutoff}
+fqtl.pval <- fdr.tab %>%
+    filter(pip == .5) %>%
+    select(pval) %>%
+    .unlist()
+
+fqtl.qval <- fdr.tab %>%
+    filter(pip == .5) %>%
+    select(qval.emp) %>%
+    .unlist()
+```
+
+```{r N_Discovery}
+num.coding.genes <- coding.genes %>% nrow()
+num.heritable.genes <- fqtl.snp.tab %>% select(ensg) %>% unique() %>% nrow()
+num.heritable.factors <- fqtl.snp.tab %>% select(ensg, factor) %>% unique() %>% nrow()
+
+ntis.factor.tab <-
+    fqtl.tis.tab %>%
+    filter(tis.lodds > 0) %>%
+    select(ensg, factor, tis) %>%
+    unique() %>%
+    group_by(ensg, factor) %>%
+    summarize(ntis = length(unique(tis))) %>%
+    as.data.frame()
+
+ntis.gene.tab <-
+    fqtl.tis.tab %>%
+    filter(tis.lodds > 0) %>%
+    select(ensg, tis) %>%
+    unique() %>%
+    group_by(ensg) %>%
+    summarize(ntis = length(unique(tis))) %>%
+    as.data.frame()
+
+ntis.hist.factor.tab <- ntis.factor.tab %>%
+    group_by(ntis) %>%
+    summarize(freq = n()) %>%
+    mutate(level = 'factor')
+
+ntis.hist.gene.tab <- ntis.gene.tab %>%
+    group_by(ntis) %>%
+    summarize(freq = n()) %>%
+    mutate(level = 'gene')
+
+count.tis.tab <-
+    fqtl.tis.tab %>%
+    filter(tis.lodds > 0) %>%
+    as.data.frame() %>%
+    select(ensg, factor, tis) %>%
+    unique() %>%
+    mutate(ensg.factor = ensg %&&% '_' %&&% factor) %>%
+    group_by(tis) %>%
+    summarize(ngene = length(unique(ensg)),
+              nfactor = length(unique(ensg.factor))) %>%
+    as.data.frame() %>%
+    left_join(tis.tab, by = 'tis') %>%
+    left_join(gtex.color.tab, by = 'tis.name')
+
+tis.idx <- count.tis.tab$tis
+
+tis.jaccard.mat <-
+    fqtl.tis.tab %>%
+    filter(tis.lodds > 0) %>%
+    as.data.frame() %>%
+    mutate(pip = 1/(1 + exp(-tis.lodds))) %>%
+    group_by(ensg, tis) %>%
+    summarize(pip = max(pip)) %>%
+    spread(key = tis, value = pip, fill = 0) %>%
+    as.data.frame() %>%
+    select(-ensg) %>%
+    select_(.dots = as.character(tis.idx)) %>%
+    t() %>% round() %>%
+    (function(x) as(x, 'sparseMatrix')) %>%
+    fast.similarity(method = 'jaccard') %>%
+    as.matrix()
+```
+
+We trained the factored eQTL model gene by gene on `r num.int(num.coding.genes)` protein coding genes located in autosomal chromosomes, imposing spike-slab prior distribution on the regression coefficients [@Mitchell1988-cf; @Carbonetto2012-bb].  This Bayesian approach can effectively handle multi-collinearity problem between SNPs within a linkage disequilibrium block.  For each gene, we combine gene expression of `r num.int(nrow(tis.tab))` tissues, after tissue by tissue confounder correction, and construct an individual by tissue matrix and fit our factored regression model including all genotype information within $\pm$ 1Mb window.  We considered a gene is heritable if the maximum value of posterior inclusion probability (PIP) of the SNP effects is greater than $0.5$.  After the hyper-parameter tuning, the estimates of PIP values tend to extreme values, either 0 or 1.  We estimated through sample permutation this PIP cutoff corresponds to p-value $<$ `r num.sci(fqtl.pval)` and empirical false discovery rate [@Storey2003-zc; @Storey2003-yd] $<$ `r num.sci(fqtl.qval)`.
+
+### Factored regression model provides parsimonious description of multi-tissue patterns
+
+Of `r num.int(num.coding.genes)` protein coding genes, we found `r num.int(num.heritable.genes)` genes are strongly heritable with respect to our factored eQTL model in GTEx (`r num.round(num.heritable.genes/num.coding.genes*100)`%).  Of them, as there can be multiple factors within a gene, we identified `r num.int(num.heritable.factors)` independent genetic factors and used them to investigate genetic correlation with `r num.int(ntraits)` GWAS statistics (on average `r num.round(num.heritable.factors/num.heritable.genes)` genetic factors per gene).  Within each gene the factored QTL model combines the regulatory mechanisms shared on average `r ntis.gene.tab %>% summarize(mu=mean(ntis)) %>% select(mu) %>% .unlist() %>% num.round()` tissues and reduce model complexity of the multivariate regression model. Each factor pools information of average `r ntis.factor.tab %>% summarize(mu=mean(ntis)) %>% select(mu) %>% .unlist() %>% num.round()` tissues.  Yet, it is interesting to note that our model estimation is highly skewed toward a single tissue model (Fig. \ref{fig:freq}), rather than the characteristic bimodal shape of the univariate eQTL models previously reported by the GTEx consortium [@GTEx_Consortium2015-vr; @GTEx_Consortium2017-jb].
+
+```{r Fig1_Hist_Tis, fig.width = 6, fig.height = 3, fig.cap = "\\label{fig:tis.freq}__Factored QTL models find tissue-specific genetic regulatory mechanisms.__  _Left_: Frequency of the number of active tissues per factor; _Right_: Frequency of the number of active tissues per gene."}
+plt.tis.hist <-
+    bind_rows(ntis.hist.factor.tab, ntis.hist.gene.tab) %>%
+    gg.plot() +
+    theme(legend.position = 'none') +
+    geom_bar(aes(x = ntis, y = freq, fill = level),
+             stat = 'identity') +
+    facet_grid(.~level) +
+    xlab('Number of active tissues (PIP > 0)') +
+    ylab('Frequency')
+
+print(plt.tis.hist)
+
+gg.save(filename = 'Fig/20180807/Fig1_Hist_Tis.pdf', plot = plt.tis.hist,
+       width = 6, height = 3)
+################################################################
+```
+
+```{r Fig2_Tis_Count, fig.width = 8, fig.height = 3, fig.cap = "\\label{fig:tis.sample.size}__Statistical power of factored QTL model depends on samples sizes.__ The _colors_ indiciate different types of tissues."}
+################################################################
+plt.tis.count <-
+    gg.plot(count.tis.tab) +
+    geom_point(aes(x = tis.size, y = ngene, fill = tis.name), pch = 21) +
+    scale_fill_manual('Tissues', values = count.tis.tab$tis.color) +
+    ylab('Number of factored-eQTL genes in tissue') + xlab('Tissue sample size') +
+    theme(legend.position = 'right',
+          legend.text = element_text(size = 5),
+          legend.key.height = unit(.75, 'line'))
+print(plt.tis.count)
+gg.save(filename = 'Fig/20180807/Fig2_Tis_Count.pdf',
+        plot = plt.tis.count, width = 8, height = 3)
+################################################################
+```
+
+The statistical power of eQTL discovery is limited to the underlying sample sizes (Fig. \ref{fig:tis.sample.size}).  This is expected as our models specifically highlight tissue-specificity, rather than ubiquitous patterns shared across all tissues.  Accumulating all the tissue factors we can create similarity matrix between tissues (Fig. \ref{fig:tis.jaccard}).  We measure inter-tissue similarity by Jaccard coefficients.  Although this type of view averaged over all genes is limited in resolution, we find strong similarity between the brain tissues; gene-regulatory mechanisms in the other tissues with similar physiological characters tend to cluster together (e.g., between "Artery Tibial" and "Artery Aorta").
+
+```{r Fig3_Tis_Jaccard, fig.width = 6, fig.height = 4, fig.cap = '\\label{fig:tis.jaccard}__Average similarity patterns across tissues spearate the brain tissues from others.__'}
+################################################################
+tis.order <- row.order(tis.jaccard.mat)
+tis.name.order <- tis.tab$tis.name[tis.order]
+tis.color.order <- count.tis.tab$tis.color[tis.order]
+
+tis.jaccard.tab <- tis.jaccard.mat %>%
+    as.data.frame() %>%
+    (function(x) { colnames(x) <- tis.idx; return(x) }) %>%
+    mutate(row = tis.idx) %>%
+    gather(key = 'col', value = 'jaccard', -row) %>%
+    mutate(row = factor(row, tis.order, tis.name.order),
+           col = factor(col, tis.order, tis.name.order))
+
+.fill.colors <- c('white', 'white', 'orange', 'red', 'red')
+plt.tis.jaccard <-
+    gg.plot(tis.jaccard.tab %>% filter(row != col)) +
+    geom_tile(aes(x = row, y = col, fill = jaccard), color = 'gray') +
+    scale_fill_gradientn('Jaccard\nCoeff.\nBetween\nTissues', colors = .fill.colors, limits = c(0, 1)) +
+    geom_point(data = tis.jaccard.tab %>% filter(row == col),
+               aes(x = row, y = col, color = row),
+               show.legend = FALSE, pch = 15, size = 2) +
+    scale_color_manual(values = tis.color.order) +
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 6),
+          axis.title = element_blank())
+print(plt.tis.jaccard)
+gg.save(filename = 'Fig/20180807/Fig3_Tis_Jaccard.pdf',
+        plot = plt.tis.count, width = 6, height = 4)
+################################################################
+```
+
+```{r Num_SNPs_FQTL}
+nsnp.factor.tab <-
+    fqtl.snp.tab %>%
+    left_join(fqtl.tis.tab %>% filter(tis.lodds > 0)) %>%
+    group_by(ensg, factor) %>%
+    summarize(nsnp = length(unique(snp)), ntis = length(unique(tis))) %>%
+    mutate(level = 'factor') %>%
+    as.data.frame()
+
+nsnp.gene.tab <-
+    fqtl.snp.tab %>%
+    left_join(fqtl.tis.tab %>% filter(tis.lodds > 0)) %>%
+    group_by(ensg) %>%
+    summarize(nsnp = length(unique(snp)), ntis = length(unique(tis))) %>%
+    mutate(level = 'gene') %>%
+    as.data.frame()
+
+n.multi.gene <- nsnp.gene.tab %>%
+    summarize(sum(nsnp > 1)) %>%
+    .unlist()
+
+n.multi.factor <- nsnp.factor.tab %>%
+    summarize(sum(nsnp > 1)) %>%
+    .unlist()
+
+.cor.snp.tis <- function(tab) {
+    temp <- cor.test(log10(tab$ntis), log10(tab$nsnp))
+    data.frame(cor = temp$estimate, p.val = temp$p.value)
+}
+
+snp.tis.deg.cor <- bind_rows(nsnp.factor.tab, nsnp.gene.tab) %>%
+    group_by(level) %>% do(.cor.snp.tis(.)) %>%
+    as.data.frame()
+################################################################
+```
+
+### `r num.int(n.multi.gene)` genes are regulated by multiple SNPs
+
+In the sparse multivariate eQTL analysis we estimate the expression of `r num.int(n.multi.gene)` genes are regulated by more than one QTL SNPs (`r nsnp.gene.tab %>% summarize(mean(nsnp > 1) * 100) %>% .unlist() %>% num.round()`%).  We also find `r num.int(n.multi.factor)` factors are regulated by multiple SNPs (`r nsnp.factor.tab %>% summarize(mean(nsnp > 1) * 100) %>% .unlist() %>% num.round()`%). Since the variational inference [@Carbonetto2012-bb] with the spike-slab prior [@Mitchell1988-cf] generally tags fewer number of causal (up to linkage disequilibrium) than the actual number of independent causal variants, we may be able to consider that nearly all genes are regulated by multiple independent causal SNPs.  In our simulation experiments on small set of GTEx data[@Park2017-vh], we found our factored QTL approach outperform most existing methods, especially when genetic regulatory mechanisms are shared across multiple tissues. On average we identify `r nsnp.gene.tab %>% summarize(mean(nsnp)) %>% num.round()` causal SNPs per gene; `r nsnp.factor.tab %>% summarize(mean(nsnp)) %>% num.round()` per factor.  The degree distributions of QTLs per gene and factor seem to follow a power law distribution with fat heavy tails (Fig. \ref{fig:snp.freq}).
+
+```{r Fig4_Hist_SNP, fig.width = 6, fig.height = 3, fig.cap = '\\label{fig:snp.freq}__Degree distribution of causal eQTLs follow the power law distribution.__'}
+################################################################
+.snp.freq.tab <- function(x) {
+    x %>%
+    group_by(nsnp, level) %>%
+    summarize(freq = n())
+}
+plt.snp.hist <-
+    list(nsnp.factor.tab, nsnp.gene.tab) %>%
+    lapply(FUN = .snp.freq.tab) %>%
+    bind_rows() %>%
+    gg.plot() +
+    theme(legend.position = 'none') +
+    geom_point(aes(x = nsnp, y = freq, color = level)) +
+    facet_grid(.~level) +
+    scale_x_log10() +
+    scale_y_log10() +
+    xlab('Number of causal SNPs (PIP > 0)') +
+    ylab('Frequency')
+print(plt.snp.hist)
+gg.save(filename = 'Fig/20180807/Fig4_Hist_SNP.pdf', width = 6, height = 3)
+################################################################
+```
+
+Our factored regression tends to include more SNPs to describe more tissues with correlation `r snp.tis.deg.cor %>% filter(level == 'factor') %>% select(cor) %>% .unlist() %>% num.round()` at the factor-level and correlation `r snp.tis.deg.cor %>% filter(level == 'gene') %>% select(cor) %>% .unlist() %>% num.round()` at the gene-level (Fig.\ref{fig:snp.tis.deg.cor}).  These correlations were calculated between the log-transformed SNP and tissue degrees.  As for thorough biological interpretations, a spare regression models with relevant epigenomic and other pathway-level annotations will be greatly beneficial [@Carbonetto2013-fo].
+
+```{r Fig5_Tis_SNP_Cor, fig.width = 6, fig.height = 3, fig.cap = '\\label{fig:snp.tis.deg.cor}__SNP and tissue degrees are correlated within factor-level and genel-level models.__'}
+plt.tis.snp.deg <-
+    gg.plot(bind_rows(nsnp.gene.tab, nsnp.factor.tab), aes(x = ntis, y = nsnp)) +
+    scale_x_log10() +
+    scale_y_log10() +
+    geom_hex(color = 'gray', size = .1) +
+    geom_smooth(method = 'lm', se = FALSE, color = 'red', size = .5) +
+    facet_grid(.~level) +
+    xlab('Number of active tissues') +
+    ylab('Number of causal SNPs') +
+    scale_fill_gradientn(colors = c('blue', 'gray', 'yellow'), trans = 'log10')
+print(plt.tis.snp.deg)
+gg.save(filename = 'Fig/20180807/Fig5_Tis_SNP_Cor.pdf', plot = plt.tis.snp.deg, width = 6, height = 3)
+```
+
+
+## Transcriptome-wide association studies (TWAS) on `r ntraits %>% num.int()` GWAS summary statistics
+
+
+### Genetic regulation of `r selected.factors %>% select(ensg) %>% unique() %>% nrow() %>% num.int()` genes are associated with `r num.int(ntraits)` GWAS traits
+
+```{r}
+################################################################
+## Assign membership by argmax
+clust.out <- twas.factor.cluster
+
+twas.factor.argmax <-
+    clust.out$Z %>%
+    (function(zz) {
+        argmax <- zz %>% select(-ensg,-factor) %>% apply(MARGIN = 1, which.max)
+        zz %>% select(ensg, factor) %>% mutate(argmax)
+    })
+
+trait.stat.tab <-
+    twas.factor.argmax %>%
+    right_join(twas.tab) %>%
+    na.omit() %>%
+    filter(p.val < twas.cutoff) %>%
+    group_by(trait) %>%
+    summarize(n.sig.factor = n()) %>%
+    mutate(ntot = fqtl.snp.tab %>% select(ensg, factor) %>% unique() %>% nrow())
+
+################################################################
+```
+
+We tested genetic correlation between the multivariate eQTL effects and GWAS summary statistics using summary statistics-based TWAS [@Mancuso2017-jr; @Gusev2018-hw] on each trait independently.  After applying multiple hypothesis correction of `r num.int(max.nfactors)` tests in each trait, with p-value threshold `r num.sci(twas.cutoff)`, we discovered `r selected.factors %>% nrow() %>% num.int()` factors of `r selected.factors %>% select(ensg) %>% unique() %>% nrow() %>% num.int()` genes as a potential regulator of these GWAS traits.
+
+```{r Fig6_TWAS_Degree, fig.width = 3, fig.height = 3, fig.cap = '\\label{fig:twas.trait.degree}'}
+
+.tab1 <- twas.tab %>% filter(p.val < twas.cutoff) %>%
+    left_join(fqtl.tis.tab %>% filter(tis.lodds > 0)) %>%
+    group_by(ensg, factor) %>%
+    summarize(ntrait = length(unique(trait)), ntis = length(unique(tis))) %>%
+    mutate(level = 'factor')
+
+.tab2 <- twas.tab %>% filter(p.val < twas.cutoff) %>%
+    left_join(fqtl.tis.tab %>% filter(tis.lodds > 0)) %>%
+    group_by(ensg) %>%
+    summarize(ntrait = length(unique(trait)), ntis = length(unique(tis))) %>%
+    mutate(level = 'gene')
+
+trait.deg.tab <- bind_rows(.tab1, .tab2)
+
+## .tab1 <- selected.factors %>%
+.cor.tis.trait <- function(tab) {
+    temp <- cor.test(tab$ntis, tab$ntrait)
+    data.frame(cor = temp$estimate, p.val = temp$p.value)
+}
+
+deg.cor.tis.trait <- trait.deg.tab %>% group_by(level) %>%
+    do(.cor.tis.trait(.)) %>%
+    as.data.frame()
+
+avg.trait.tis.deg <- trait.deg.tab %>% group_by(level) %>%
+    summarize(ntrait = mean(ntrait), ntis = mean(ntis)) %>%
+    as.data.frame()
+
+plt.trait.deg <-
+    (trait.deg.tab %>%
+     as.data.frame() %>%
+     group_by(ntrait, level) %>%
+     summarize(freq = n()) %>%
+     as.data.frame() %>%
+     arrange(ntrait)) %>%
+    gg.plot() +
+    geom_point(aes(x = ntrait, y = freq, color = level, shape = level)) +
+    scale_shape_manual(values = c(3, 21)) +
+    scale_y_log10() +
+    xlab('Number of asociated traits') + ylab('Frequency') +
+    theme(legend.position = c(1,1), legend.justification = c(1, 1),
+          legend.title = element_blank())
+
+print(plt.trait.deg)
+gg.save(filename = 'Fig/20180807/Fig6_TWAS_Degree.pdf', plot = plt.trait.deg, width = 3, height = 3)
+################################################################
+```
+
+These TWAS genes are pleiotropic along the GWAS trait and GTEx tissue axes.  On average, they are associated with `r avg.trait.tis.deg %>% filter(level == 'factor') %>% select(ntrait) %>% .unlist() %>% num.round()` traits and active in `r avg.trait.tis.deg %>% filter(level == 'factor') %>% select(ntis) %>% .unlist() %>% num.round()` tissues at the factor-level; `r avg.trait.tis.deg %>% filter(level == 'gene') %>% select(ntrait) %>% .unlist() %>% num.round()` traits and active in `r avg.trait.tis.deg %>% filter(level == 'gene') %>% select(ntis) %>% .unlist() %>% num.round()` tissues.  However we note that the degree of gene-level and factor-level pleiotropy is bounded and empirically the probability decreases exponentially (Fig.\ref{fig:twas.trait.degree}).
+
+We also note that the degrees of tissues and GWAS traits are weakly correlated with `r deg.cor.tis.trait %>% filter(level == 'factor') %>% select(cor) %>% .unlist() %>% num.round()` at the factor-level and `r deg.cor.tis.trait %>% filter(level == 'gene') %>% select(cor) %>% .unlist() %>% num.round()` at the gene-level (Fig.\ref{fig:tis.trait.deg.cor}).  In other words, this results suggest that multi-tissue genes are generally pleiotropic in TWAS; therefore, when it comes to the interpretation GWAS using eQTL data, multi-tissue genes may provide sufficient level of resolutions.
+
+```{r Fig7_Tis_Trait_Cor, fig.width = 6, fig.height = 3, fig.cap = '\\label{fig:tis.trait.deg.cor}__Tissue and trait degrees are weakly correlated within factor-level and genel-level models.__'}
+
+plt.tis.trait.deg <-
+    gg.plot(trait.deg.tab, aes(x = ntis, y = ntrait)) +
+    scale_x_log10() +
+    geom_hex(color = 'gray', size = .1) +
+    geom_smooth(method = 'lm', se = FALSE, color = 'red', size = .5) +
+    facet_grid(.~level) +
+    xlab('Number of active tissues') +
+    ylab('Number of TWAS traits') +
+    scale_fill_gradientn(colors = c('blue', 'gray', 'yellow'), trans = 'log10')
+print(plt.tis.trait.deg)
+gg.save(filename = 'Fig/20180807/Fig7_Tis_Trait_Cor.pdf', plot = plt.tis.trait.deg, width = 6, height = 3)
+```
+
+
+```{r Order_Trait_Cluster}
+sum.clust.trait.stat <- function(tab) {
+    tab %>%
+        rename(white.ball = n.sig.factor, drawn = val) %>%
+            summary.enrichment.stat()
+}
+
+temp.data.file <- '20180807_twas_clustering.RData'
+if(file.exists(temp.data.file)) {
+    load(temp.data.file)
+} else {
+    trait.mean.tab <-
+        clust.out$feature %>%
+            gather(key = 'trait', value = 'val', -ensg, -factor) %>%
+                left_join(twas.factor.argmax) %>%
+                    left_join(trait.stat.tab) %>%
+                        group_by(trait, argmax) %>%
+                            do(sum.clust.trait.stat(.)) %>%
+                                as.data.frame()
+
+    trait.mean.order <- trait.mean.tab %>%
+        rename(row = trait, col = argmax, weight = mu) %>%
+            select(row, col, weight) %>%
+                order.pair()
+
+    trait.clust.order <- trait.mean.order$col
+
+    ## This probably yields fragmented ordering
+    ## trait.mean.tab$trait <- factor(trait.mean.tab$trait, trait.mean.order$row)
+    ## Try this:
+    trait.mean.order <-
+        trait.mean.tab %>%
+            mutate(argmax.i = factor(argmax, trait.mean.order$col) %>% as.integer()) %>%
+                select(trait, argmax.i, mu) %>%
+                    spread(key = argmax.i, value = mu) %>%
+                        as.data.frame()
+
+    trait.mean.order <- trait.mean.order %>%
+        arrange(trait) %>% select(-trait) %>%
+            apply(MARGIN = 1, FUN = which.max) %>%
+                order(decreasing = TRUE) %>%
+                    (function(x) {
+                        temp <- trait.mean.tab$trait %>%
+                            unique() %>%
+                                sort();
+                        temp[x] })
+
+    trait.mean.tab.sorted <- trait.mean.tab %>%
+        mutate(argmax = factor(argmax, trait.clust.order),
+               trait = factor(trait, trait.mean.order))
+
+    save(list = c('trait.mean.tab', 'trait.mean.order', 'trait.mean.tab.sorted', 'trait.clust.order'), file = temp.data.file)
+}
+################################################################
+```
+
+
+
+### Trait-trait correlation of TWAS associations reveal distinctive gene-level pleiotropy of the blood and metabolic traits
+
+Observing the maximum degree of trait pleiotropy within a gene is limited ($\le$ `r trait.deg.tab$ntrait %>% max()`), we seek to understand a global architecture of `r twas.factor.argmax %>% nrow() %>% num.int()` the multi-tissue genetic factors based on the trait-sharing patterns by clustering columns of a giant trait by factor binary matrix $F$ (Supp.Fig.\ref{fig.supp:twas.feature.mat}), where $F_{tg} = 1$ if and only if genetic factor $g$ is significantly associated with trait $t$, otherwise $F_{tg} = 0$.  First we investigate overall similarity between traits (Fig.\ref{fig:trait.trait.jaccard}).  Between trait $t$ and $s$ we measure Jaccard similarity $J_{ts}=\sum_{g}F_{tg}F_{sg}/(\sum_{g}F_{tg} + \sum_{g}F_{sg} - \sum_{g}F_{tg}F_{sg})$.  One of the most salient patterns capture a group of blood cell count traits [@Astle2016-sb]. Also, we notice that different body mass index (BMI) of multiple studies are tightly grouped together.  Since this trait-trait correlation matrix simply takes average over all genes, it dose not provide fine-resolution pictures of gene-level pleiotropic patterns.
+
+```{r Fig8_Trait_Sharing, fig.width = 8, fig.height = 7, fig.cap = '\\label{fig:trait.trait.jaccard}__Trait-trait correlation of TWAS associations reveal distinctive pleiotropic clusters.__'}
+################################################################
+traits <- twas.tab$trait %>% unique() %>% sort()
+
+## trait sharing
+trait.jaccard.mat <- twas.tab %>%
+    filter(p.val < twas.cutoff) %>%
+    as.data.frame() %>%
+    mutate(val = 1) %>%
+    select(ensg, factor, trait, val) %>%
+    spread(key = trait, value = val, fill = 0) %>%
+    select_(.dots = traits) %>%
+    t() %>%
+    (function(x) as(x, 'sparseMatrix')) %>%
+    fast.similarity(method = 'jaccard') %>%
+    as.matrix()
+
+trait.jaccard.tab <- trait.jaccard.mat %>%
+    as.data.frame() %>%
+    (function(x) { colnames(x) <- traits; return(x) }) %>%
+    mutate(row = traits) %>%
+    gather(key = 'col', value = 'jaccard', -row) %>%
+    mutate(row = factor(row, trait.mean.order),
+           col = factor(col, trait.mean.order))
+
+.fill.colors <- c('white', 'white', 'orange', 'orange', 'red', 'red')
+
+plt.trait.jaccard <-
+    gg.plot(trait.jaccard.tab) +
+    geom_tile(aes(x = row, y = col, fill = jaccard), color = 'gray') +
+    scale_fill_gradientn('Jaccard\nCoeff.\nBetween\nTraits',
+                         colors = .fill.colors,
+                         limits = c(0, 1),
+                         trans = 'sqrt') +
+    scale_x_discrete(position = 'top') + 
+    theme(axis.text.x = element_text(size = 4, angle = 80, vjust = .5, hjust = 0),
+          axis.text.y = element_text(size = 4),
+          axis.title = element_blank())
+
+print(plt.trait.jaccard)
+gg.save(plot = plt.trait.jaccard, filename = 'Fig/20180807/Fig8_Trait_Sharing.pdf',
+        width = 8, height = 8)
+################################################################
+```
+
+### `r twas.factor.argmax %>% nrow() %>% num.int()` factors are clustered into `r twas.factor.argmax %>% select(argmax) %>% unique() %>% nrow()` groups according to factor-specific multi-trait association patterns
+
+We cluster TWAS genes (genetic factors) based on factor-specific multi-trait association patterns.  We treat each column the TWAS feature matrix $F$ as a set of associated traits, we can measure similarity between them by Jaccard coefficients.  For instance of genetic factors $g$ and $g'$, $J_{gg'}=\sum_{t}F_{tg}F_{tg'}/(\sum_{t}F_{tg} + \sum_{t}F_{tg'} - \sum_{t}F_{tg}F_{tg'})$.  We used fast `Rcpp` implementation of `text2vec` package (see `http://text2vec.org` for details).  We constructed a weighted graph connecting genetic factors, retaining only top 5% of interactions to reduce weak and noisy interactions (with the Jaccard coefficient cutoff = `r clust.out$cutoff %>% num.round()`).  We weight the retained interactions by the fold change of Jaccard coefficient with respect to the baseline cutoff (see Fig.\ref{fig.supp:twas.network} for its adjacency matrix).  We then fitted a hierarchical stochastic block model with Poisson distribution on the network to identify distinctive groups of the genetic factors.
+
+```{r Fig9_TWAS_Cluster, fig.width = 8, fig.height = 11, fig.cap = '\\label{fig:twas.cluster}__Clustering of genetic factors according to multi-trait TWAS association patterns reveals modular structure of TWAS genes.__ _1st row_: Number of SNPs used in the factored eQTL models for each cluster. _2nd row_: Number of genes in each cluster. _3rd row_: Cluster-specific average trait frquency matrix (trait rows and cluster columns)'}
+################################################################
+.fill.colors <- c('white', 'orange', 'red', 'red')
+
+.trait.mean.sig.df <- trait.mean.tab.sorted %>%
+    filter(mu > .5)
+
+plt.trait.clust <- trait.mean.tab.sorted %>%
+    gg.plot(aes(x = argmax, y = trait, fill = mu)) +
+    geom_tile(color = 'gray') +
+    geom_text(data = .trait.mean.sig.df, aes(label = argmax), size = 1.2) +
+    xlab('Gene clusters') +
+    scale_fill_gradientn('Average Frequency',
+                         colors = .fill.colors,
+                         limits = c(0, 1))
+plt.trait.clust <- plt.trait.clust +
+    theme(axis.text.y = element_text(size = 6),
+          axis.text.x = element_text(size = 4, angle = 45, hjust = 1, vjust = 1),
+          axis.title.y = element_blank(),
+          legend.position = 'bottom',
+          legend.key.width = unit(2, 'lines'),
+          legend.key.height = unit(.5, 'lines'))
+
+## Number of causal eQTL SNPs within a cluster
+snp.twas.stat.tab <-
+    selected.factors %>%
+    left_join(fqtl.snp.tab) %>%
+    left_join(twas.factor.argmax) %>%
+    group_by(argmax) %>%
+    summarize(nsnp = length(unique(snp))) %>%
+    as.data.frame() %>%
+    mutate(argmax = factor(argmax, trait.clust.order))
+
+gene.twas.stat.tab <-
+    twas.factor.argmax %>%
+    mutate(factor = ensg %&&% factor) %>%
+    group_by(argmax) %>%
+    summarize(ngenes = length(unique(ensg)), nfactors = n()) %>%
+    as.data.frame() %>%
+    mutate(argmax = factor(argmax, trait.clust.order))
+
+plt.twas.clust.snp <-
+    gg.plot(snp.twas.stat.tab) +
+    geom_bar(aes(x = argmax, y = nsnp), stat = 'identity') +
+    theme(axis.text = element_text(size = 5),
+          axis.text.x = element_blank(),
+          axis.title = element_blank())
+
+plt.twas.gene <- gg.plot(gene.twas.stat.tab) + geom_bar(aes(x = argmax, y = ngenes), stat = 'identity') +
+    theme(axis.text = element_text(size = 5),
+          axis.text.x = element_blank(),
+          axis.title = element_blank())
+
+g.out <- grid.vcat(list(plt.twas.clust.snp, plt.twas.gene, plt.trait.clust), heights = c(.75, .75, 9.5))
+
+gg.save(filename = 'Fig/20180807/Fig9_TWAS_Cluster.pdf', plot = g.out, width = 8, height = 11)
+################################################################
+```
+
+
+```{r}
+ntrait.clust.tab <- trait.mean.tab %>% filter(n.overlap > 0) %>%
+    group_by(argmax, trait) %>% summarize(mu.sum = sum(mu)) %>%
+    as.data.frame() %>% group_by(argmax) %>%
+    summarize(ntrait = sum(mu.sum)) %>%
+    as.data.frame()
+```
+
+### 
+
+Roughly each gene cluster is associated with average `r mean(ntrait.clust.tab$ntrait) %>% num.round()` traits.
+
+
+```{r Fig10_Trait_Clust, fig.width = 4, fig.height = 3, fig.cap = '\\label{fig:}'}
+xx <- scale_x_continuous(breaks = seq(0, ceiling(max(ntrait.clust.tab$ntrait))))
+
+plt.ntrait.clust <- gg.plot(ntrait.clust.tab) +
+    geom_histogram(aes(x = ntrait), binwidth = 1) +
+    xlab('Average number of the associated traits in cluster') +
+    ylab('Frequency') +
+    xx +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1))
+print(plt.ntrait.clust)
+
+gg.save(filename = 'Fig/20180807/Fig10_Trait_Clust.pdf', plot = plt.ntrait.clust, width = 4, height = 3)
+```
+
+
+
+
+### Limited tissue-specificity
+
+
+```{r Fig11_TWAS_Tis}
+sum.clust.tis.stat <- function(tab) {
+    tab %>%
+        rename(white.ball = ntis, drawn = val) %>%
+            summary.enrichment.stat()
+}
+
+tis.stat.tab <-
+    fqtl.tis.tab %>%
+    left_join(selected.factors) %>%
+    group_by(tis) %>%
+    summarize(ntis = sum(tis.lodds > 0)) %>%
+    mutate(ntot = max.nfactors)
+
+tis.mean.tab <-
+    fqtl.tis.tab %>%
+    left_join(tis.stat.tab) %>%
+    left_join(twas.factor.argmax) %>%
+    na.omit() %>%
+    mutate(val = if_else(tis.lodds > 0, 1, 0)) %>%
+    group_by(tis, argmax) %>%
+    do(sum.clust.tis.stat(.)) %>%
+    mutate(qval = p.adjust(pval, method = 'fdr')) %>%
+    as.data.frame()
+
+tis.mean.order <-
+    tis.mean.tab %>%
+    mutate(argmax.i = factor(argmax, trait.clust.order) %>% as.integer()) %>%
+    select(tis, argmax.i, qval) %>%
+    spread(key = argmax.i, value = qval) %>%
+    as.data.frame() %>%
+    arrange(tis) %>% select(-tis) %>%
+    apply(MARGIN = 1, FUN = which.min) %>%
+    order(decreasing = TRUE) %>%
+    (function(x) data.frame(i = x, n = tis.tab[x, 'tis.name'] %>% .unlist()))
+
+tis.mean.tab.sorted <- tis.mean.tab %>%
+    mutate(tis = factor(tis, tis.mean.order$i, tis.mean.order$n),
+           argmax = factor(argmax, trait.clust.order))
+
+tis.tab.significant <- tis.mean.tab.sorted %>%
+    filter(qval < 1e-4, n.drawn > 1)
+
+.fill.colors <- c('white', 'white', 'white', 'orange', 'red')
+plt.tis.clust <-
+    gg.plot(tis.mean.tab.sorted, aes(x = argmax, y = tis, fill = mu)) +
+    geom_tile(color = 'gray') +
+    geom_text(data = tis.tab.significant, aes(label = argmax), size = 1) +
+    scale_fill_gradientn('Mean\nFrequency', colors = .fill.colors, limits = c(0, 1)) +
+    xlab('Gene clusters') +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.text.y = element_text(size = 6),
+          axis.text.x = element_text(size = 4, angle = 45),
+          axis.title.y = element_blank(),
+          legend.position = 'bottom',
+          legend.key.width = unit(2, 'lines'),
+          legend.key.height = unit(.5, 'lines'))
+print(plt.tis.clust)
+
+################################################################
+```
+
+# Supplementary materials
+
+## Supplementary figures
+
+```{r Fig12_TWAS_clust, fig.width = 12, fig.height = 8, fig.cap = '\\label{fig.supp:twas.feature.mat}__TWAS__'}
+## Show overall feature mat
+pos.order <- clust.out$features %>%
+    select(ensg, factor) %>%
+    mutate(pos = 1:n()) %>%
+    left_join(twas.factor.argmax) %>%
+    mutate(argmax = factor(argmax, trait.clust.order)) %>%
+    arrange(argmax) %>%
+    select(pos)
+
+feature.tab <-
+    clust.out$features %>%
+    mutate(pos = 1:n()) %>%
+    select(-ensg, -factor) %>%
+    gather(key = 'trait', value = 'val', -pos) %>%
+    filter(val > 0) %>%
+    mutate(pos = factor(pos, pos.order$pos)) %>%
+    mutate(trait = factor(trait, trait.mean.order))
+
+plt.trait.feature <-
+    gg.plot(feature.tab) +
+    geom_tile(aes(y = trait, x = pos)) +
+    theme(axis.text = element_blank(), axis.ticks = element_blank()) +
+    xlab('Genetic factors') + ylab('Traits')
+
+print(plt.trait.feature)
+## Save
+```
+
+```{r Fig13_TWAS_Adj, fig.width = 8, fig.height = 8, fig.cap = '\\label{fig.supp:twas.network}__TWAS Network__'}
+## Show adjacency matrix
+image(clust.out$data$A[pos.order$pos, pos.order$pos])
+
+```
+
+
+```{r Fig14_TWAS_Freq, fig.width = 4, fig.height = 8, fig.cap = '\\label{fig.supp:twas.freq}__TWAS__'}
+################################################################
+trait.size.order <- trait.stat.tab %>%
+    arrange(n.sig.factor) %>%
+    select(trait) %>% .unlist()
+
+plt.twas.trait.freq <-
+    trait.stat.tab %>%
+    mutate(trait = factor(trait, trait.size.order)) %>%
+    gg.plot() +
+    geom_point(aes(x = n.sig.factor, y = trait)) +
+    xlab('Number of TWAS hits') +
+    theme(axis.title.y = element_blank(),
+          axis.text.y = element_text(size = 5))
+
+################################################################
+```
+
+# References

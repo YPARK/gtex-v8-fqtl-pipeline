@@ -1,0 +1,208 @@
+---
+title: Gene ontology enrichment of TWAS clusters
+author: "Yongjin Park"
+theme: jekyll-theme-minimal
+date: "`r Sys.time()`"
+bibliography: gtex.bib
+csl: nature.csl
+---
+
+```{r GlobOpt, include = FALSE}
+dir.create('Fig/20180808/', recursive = TRUE)
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.path = 'Fig/20180808/')
+```
+
+```{r ReadData}
+source('../Util.R')
+source('./Util.Fig.R')
+library(dplyr)
+library(tidyr)
+library(qvalue)
+library(readr)
+
+################################################################
+twas.data.file <- '20180807_twas_result.RData'
+load(twas.data.file)
+
+required.twas.clust.file <- '../twas/hsb_7_0.05_cluster.RData'
+load(required.twas.clust.file)
+
+twas.ordering.data.file <- '20180807_twas_clustering.RData'
+load(twas.ordering.data.file)
+
+num.int <- function(x) format(x, big.mark = ',')
+num.sci <- function(x, d=2) format(x, scientific = TRUE, digits = d)
+num.round <- function(x, d=2) round(x, d)
+gg.save <- function(...) ggsave(..., useDingbats = FALSE, units = 'in', limitsize = FALSE)
+```
+
+```{r TestEnrichment}
+## Summary of enrichment within cluster
+summary.enrichment.stat <- function(tab) {
+    ## What can we control beyond the set size?
+
+    ## calculate hypergeometric p-value
+    ## phyper(q, m, n, k, lower.tail = TRUE, log.p = FALSE)
+    ##    q: vector of quantiles representing the number of white balls
+    ##       (drawn without replacement from an urn which contains both
+    ##       black and white balls).
+    ##    m: the number of white balls in the urn.
+    ##    n: the number of black balls in the urn.
+    ##    k: the number of balls drawn from the urn.
+    ##    p: probability, it must be between 0 and 1.
+
+    m <- max(tab$white.ball) ## white balls
+    n <- max(tab$ntot) - m   ## black balls
+    k <- length(tab$drawn)   ## balls drawn
+    q <- sum(tab$drawn)      ## whilte balls drawn
+
+    pval <- phyper(q, m, n, k, lower.tail = FALSE)
+
+    data.frame(mu = mean(tab$drawn),
+               n.white = m,
+               n.drawn = k,
+               n.overlap = q,
+               pval = pval)
+}
+
+genes.tot.heritable <- fqtl.snp.tab %>% select(ensg) %>%
+    unique() %>%
+    separate('ensg', c('ensGene', 'remove'), sep = '[.]') %>%
+    select(-remove) %>%
+    .unlist()
+
+temp.data.file <- '20180808_twas_clustering_geneontology.RData'
+
+if(file.exists(temp.data.file)) {
+    load(temp.data.file)
+} else {
+
+    ensembl <- biomaRt::useEnsembl(biomart='ensembl',
+                          dataset = 'hsapiens_gene_ensembl',
+                          version = 79)
+
+    ## go.attr <- c('ensembl_gene_id', 'goslim_goa_accession', 'goslim_goa_description')
+
+    go.attr <- c('ensembl_gene_id', 'go_id', 'name_1006', 'namespace_1003')
+
+    go.bm <- biomaRt::getBM(filters = 'ensembl_gene_id', values = genes.tot.heritable,
+                   attributes = go.attr,
+                   mart = ensembl)
+
+    go.tab <- go.bm %>% (function(tab) {
+        names(tab) <- c('gene', 'go', 'go.name', 'go.onto');
+        return(tab) }) %>%
+            filter(nchar(go.name) > 0)
+
+    go.size.tab <- go.tab %>%
+        group_by(go) %>%
+            summarize(go.size = n()) %>%
+                as.data.frame()
+
+    ntot <- go.tab %>% dplyr::select(gene) %>%
+        unique() %>% nrow()
+   
+    clust.out <- twas.factor.cluster
+
+    gene.cluster <- 
+        clust.out$Z %>%
+            tidyr::separate('ensg', c('gene', 'remove'), sep = '[.]') %>%
+                dplyr::select(-remove, -factor) %>%
+                    tidyr::gather(key = 'cluster', value = 'val', -gene) %>%
+                        mutate(cluster = gsub(cluster, pattern = 'K', replacement = '')) %>%
+                            mutate(cluster = as.integer(cluster)) %>%
+                                mutate(val = round(val))
+
+    cluster.gene.ontology.tab <-
+        gene.cluster %>%
+            left_join(go.tab, by = 'gene') %>%
+                left_join(go.size.tab, by = 'go') %>%
+                    mutate(ntot = ntot) %>%
+                        filter(go.size >= 5, go.size <= 500) %>%
+                            group_by(cluster, go, go.name, go.onto) %>%
+                                dplyr::rename(drawn = val, white.ball = go.size) %>%
+                                    dplyr::do(summary.enrichment.stat(.)) %>%
+                                        as.data.frame()
+
+    save(list = c('cluster.gene.ontology.tab', 'gene.cluster'),
+         file = temp.data.file)
+}
+```
+
+We tested significant over-representation of the gene ontology (GO) terms [@Ashburner2000-nu; @The_Gene_Ontology_Consortium2017-wz] within each trait cluster, using `r genes.tot.heritable %>% length() %>% num.int()` all the heritable genes identified in this work as a background set.  We downloaded mapping between genes and GO terms using `biomaRt` and its `R` interface [@Durinck2005-fk; @Durinck2009-tu] (ENSEMBL version 79).  We restricted our tests on `r cluster.gene.ontology.tab$go.name %>% unique() %>% length() %>% num.int()` GO terms with a reasonable set size, ranging between 5 and 500 after intersecting them with the heritable genes.
+
+```{r Fig_Top_GO_clust, fig.width = 10, fig.height = 8, fig.cap = '\\label{fig:go.tab}__Gene Ontology enrichement on TWAS clusters shows disnticitive biological processes.__'}
+################################################################
+cluster.gene.ontology.tab <- 
+    cluster.gene.ontology.tab %>%
+    mutate(argmax = factor(cluster, trait.clust.order)) %>%
+    na.omit()
+
+take.top.go <- function(tab) {
+    ret <- tab %>%
+        filter(n.overlap > 0, mu > .1) %>%
+            arrange(pval, mu, n.white) %>%
+                head(3)
+    ret %>% as.data.frame()
+}
+
+top.clust.go <- cluster.gene.ontology.tab %>% 
+    filter(n.overlap > 0, n.drawn > 2, mu > .1) %>%
+    filter(go.onto == 'biological_process') %>%
+    filter(pval < 1e-5) %>%
+    group_by(cluster) %>%
+    do(take.top.go(.)) %>%
+    as.data.frame()
+
+go.clust.show <- 
+    top.clust.go %>% select(go.name) %>% unique() %>%
+    left_join(cluster.gene.ontology.tab)
+    
+go.names.show <- go.clust.show$go.name %>% unique() %>% sort()
+
+go.name.order <-
+    go.clust.show %>%
+    mutate(argmax.i = as.integer(argmax)) %>%
+    select(go.name, argmax.i, pval) %>%
+    spread(key = argmax.i, value = pval) %>%
+    as.data.frame() %>%
+    arrange(go.name) %>%
+    select(-go.name) %>%
+    apply(MARGIN = 1, FUN = which.min) %>%
+    order(decreasing = TRUE) %>%
+    ((function(x) go.names.show[x] ))
+
+go.clust.show.sorted <- go.clust.show %>%
+    mutate(go.name = factor(go.name, go.name.order)) %>%
+    mutate(nl.p = pmin(-log10(pval), 8))
+
+.go.fill.scale <- scale_fill_gradientn('-log10\np-value',
+                                       colors = c('white', 'white', 'orange', 'red'))
+
+.go.df.show <- go.clust.show.sorted %>%
+    filter(pval < 1e-4) %>%
+    mutate(lab = argmax)
+
+plt.go.clust <- 
+    gg.plot(go.clust.show.sorted) +
+    geom_tile(aes(x = argmax, y = go.name, fill = nl.p), color = 'gray') +
+    geom_text(data = .go.df.show, 
+              aes(x = argmax, y = go.name, label = lab),
+              size = 1.5)
+
+plt.go.clust <- plt.go.clust +
+    .go.fill.scale +
+    theme(axis.title = element_blank(),
+          axis.text.y = element_text(size = 6.5),
+          axis.text.x = element_text(size = 4)) +
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+print(plt.go.clust)
+gg.save(filename = 'Fig/20180808/Fig_Top_GO_clust.pdf', plot = plt.go.clust, width = 10, height = 8)
+```
+
+Of the tested `r cluster.gene.ontology.tab %>% dplyr::select(go) %>% unique() %>% nrow() %>% num.int()`, total `r sum(p.adjust(cluster.gene.ontology.tab$pval) < .05) %>% num.int()` GO terms are significantly over-represented with family-wise error rate cutoff 0.05, and we highlight the `r go.clust.show.sorted$go.name %>% unique() %>% length()` terms in `biological process` with nominal p-value $<$ 1e-5, sampling at most three most enriched categories from within each cluster (Fig.\ref{fig:go.tab}).
+
+
+# References
